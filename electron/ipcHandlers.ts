@@ -1,7 +1,6 @@
 // ipcHandlers.ts
 
-import { ipcMain, shell, dialog } from "electron"
-import { randomBytes } from "crypto"
+import { ipcMain, shell } from "electron"
 import { IIpcHandlerDeps } from "./main"
 import { configHelper } from "./ConfigHelper"
 

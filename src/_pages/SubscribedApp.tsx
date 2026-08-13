@@ -42,7 +42,7 @@ const SubscribedApp: React.FC<SubscribedAppProps> = ({
     return () => {
       cleanup()
     }
-  }, [])
+  }, [queryClient])
 
   // Dynamically update the window size
   useEffect(() => {
@@ -119,7 +119,7 @@ const SubscribedApp: React.FC<SubscribedAppProps> = ({
       window.electronAPI.onResetView(() => {
         queryClient.setQueryData(["problem_statement"], null)
       }),
-      window.electronAPI.onProblemExtracted((data: any) => {
+      window.electronAPI.onProblemExtracted((data: unknown) => {
         if (view === "queue") {
           queryClient.invalidateQueries({
             queryKey: ["problem_statement"]
@@ -132,7 +132,7 @@ const SubscribedApp: React.FC<SubscribedAppProps> = ({
       })
     ]
     return () => cleanupFunctions.forEach((fn) => fn())
-  }, [view])
+  }, [view, queryClient, showToast])
 
   return (
     <div ref={containerRef} className="min-h-0">

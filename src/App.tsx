@@ -15,6 +15,8 @@ import {
 import { ToastContext } from "./contexts/toast"
 import { WelcomeScreen } from "./components/WelcomeScreen"
 import { SettingsDialog } from "./components/Settings/SettingsDialog"
+import { Workspace } from "./features/Workspace"
+import { LiveAssistPanel } from "./features/live/LiveAssistPanel"
 
 // Create a React Query client
 const queryClient = new QueryClient({
@@ -43,10 +45,17 @@ function App() {
   const [currentLanguage, setCurrentLanguage] = useState<string>("python")
   const [isInitialized, setIsInitialized] = useState(false)
   const [hasApiKey, setHasApiKey] = useState(false)
-  const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false)
   // Note: Model selection is now handled via separate extraction/solution/debugging model settings
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  // 'workspace' = full job-search app; 'interview' = stealth live-assist overlay.
+  const [appMode, setAppMode] = useState<"workspace" | "interview">(() => {
+    return (localStorage.getItem("appMode") as "workspace" | "interview") || "workspace"
+  })
+  const switchMode = useCallback((mode: "workspace" | "interview") => {
+    localStorage.setItem("appMode", mode)
+    setAppMode(mode)
+  }, [])
 
   // Set unlimited credits
   const updateCredits = useCallback(() => {
@@ -186,7 +195,7 @@ function App() {
         "Your OpenAI API key appears to be invalid or has insufficient credits",
         "error"
       )
-      setApiKeyDialogOpen(true)
+      setIsSettingsOpen(true)
     }
 
     // Setup API key invalid listener
@@ -220,34 +229,33 @@ function App() {
     setIsSettingsOpen(open);
   }, []);
 
-  const handleApiKeySave = useCallback(async (apiKey: string) => {
-    try {
-      await window.electronAPI.updateConfig({ apiKey })
-      setHasApiKey(true)
-      showToast("Success", "API key saved successfully", "success")
-      
-      // Reload app after a short delay to reinitialize with the new API key
-      setTimeout(() => {
-        window.location.reload()
-      }, 1500)
-    } catch (error) {
-      console.error("Failed to save API key:", error)
-      showToast("Error", "Failed to save API key", "error")
-    }
-  }, [showToast])
-
   return (
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
         <ToastContext.Provider value={{ showToast }}>
           <div className="relative">
             {isInitialized ? (
-              hasApiKey ? (
-                <SubscribedApp
-                  credits={credits}
-                  currentLanguage={currentLanguage}
-                  setLanguage={updateLanguage}
+              appMode === "workspace" ? (
+                <Workspace
+                  onOpenSettings={handleOpenSettings}
+                  onSwitchToLive={() => switchMode("interview")}
+                  hasApiKey={hasApiKey}
                 />
+              ) : hasApiKey ? (
+                <>
+                  <button
+                    onClick={() => switchMode("workspace")}
+                    className="fixed top-2 left-2 z-50 text-[11px] px-2 py-1 rounded bg-black/60 text-white/70 hover:text-white border border-white/10"
+                  >
+                    返回工作台
+                  </button>
+                  <LiveAssistPanel />
+                  <SubscribedApp
+                    credits={credits}
+                    currentLanguage={currentLanguage}
+                    setLanguage={updateLanguage}
+                  />
+                </>
               ) : (
                 <WelcomeScreen onOpenSettings={handleOpenSettings} />
               )

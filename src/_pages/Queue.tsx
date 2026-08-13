@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react"
+import React, { useState, useEffect, useRef, useCallback } from "react"
 import { useQuery } from "@tanstack/react-query"
 import ScreenshotQueue from "../components/Queue/ScreenshotQueue"
 import QueueCommands from "../components/Queue/QueueCommands"
@@ -9,7 +9,12 @@ import { Screenshot } from "../types/screenshots"
 async function fetchScreenshots(): Promise<Screenshot[]> {
   try {
     const existing = await window.electronAPI.getScreenshots()
-    return existing
+    return (existing.previews || []).map((preview) => ({
+      id: preview.path,
+      path: preview.path,
+      preview: preview.preview,
+      timestamp: Date.now()
+    }))
   } catch (error) {
     console.error("Error loading screenshots:", error)
     throw error
@@ -37,7 +42,6 @@ const Queue: React.FC<QueueProps> = ({
 
   const {
     data: screenshots = [],
-    isLoading,
     refetch
   } = useQuery<Screenshot[]>({
     queryKey: ["screenshots"],
@@ -47,24 +51,27 @@ const Queue: React.FC<QueueProps> = ({
     refetchOnWindowFocus: false
   })
 
-  const handleDeleteScreenshot = async (index: number) => {
-    const screenshotToDelete = screenshots[index]
+  const handleDeleteScreenshot = useCallback(
+    async (index: number) => {
+      const screenshotToDelete = screenshots[index]
 
-    try {
-      const response = await window.electronAPI.deleteScreenshot(
-        screenshotToDelete.path
-      )
+      try {
+        const response = await window.electronAPI.deleteScreenshot(
+          screenshotToDelete.path
+        )
 
-      if (response.success) {
-        refetch() // Refetch screenshots instead of managing state directly
-      } else {
-        console.error("Failed to delete screenshot:", response.error)
-        showToast("Error", "Failed to delete the screenshot file", "error")
+        if (response.success) {
+          refetch() // Refetch screenshots instead of managing state directly
+        } else {
+          console.error("Failed to delete screenshot:", response.error)
+          showToast("Error", "Failed to delete the screenshot file", "error")
+        }
+      } catch (error) {
+        console.error("Error deleting screenshot:", error)
       }
-    } catch (error) {
-      console.error("Error deleting screenshot:", error)
-    }
-  }
+    },
+    [screenshots, refetch, showToast]
+  )
 
   useEffect(() => {
     // Height update logic
@@ -95,7 +102,6 @@ const Queue: React.FC<QueueProps> = ({
       window.electronAPI.onResetView(() => refetch()),
       window.electronAPI.onDeleteLastScreenshot(async () => {
         if (screenshots.length > 0) {
-          const lastScreenshot = screenshots[screenshots.length - 1];
           await handleDeleteScreenshot(screenshots.length - 1);
           // Toast removed as requested
         } else {
@@ -125,17 +131,21 @@ const Queue: React.FC<QueueProps> = ({
       resizeObserver.disconnect()
       cleanupFunctions.forEach((cleanup) => cleanup())
     }
-  }, [isTooltipVisible, tooltipHeight, screenshots])
+  }, [
+    isTooltipVisible,
+    tooltipHeight,
+    screenshots,
+    handleDeleteScreenshot,
+    refetch,
+    setView,
+    showToast
+  ])
 
   const handleTooltipVisibilityChange = (visible: boolean, height: number) => {
     setIsTooltipVisible(visible)
     setTooltipHeight(height)
   }
 
-  const handleOpenSettings = () => {
-    window.electronAPI.openSettingsPortal();
-  };
-  
   return (
     <div ref={contentRef} className={`bg-transparent w-1/2`}>
       <div className="px-4 py-3">

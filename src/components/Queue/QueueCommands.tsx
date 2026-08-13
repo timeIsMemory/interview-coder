@@ -80,7 +80,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
       tooltipHeight = tooltipRef.current.offsetHeight + 10
     }
     onTooltipVisibilityChange(isTooltipVisible, tooltipHeight)
-  }, [isTooltipVisible])
+  }, [isTooltipVisible, onTooltipVisibilityChange])
 
   const handleSignOut = async () => {
     try {

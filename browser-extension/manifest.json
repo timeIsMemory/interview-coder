@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "AI 求职助手 - JD 采集",
+  "version": "0.1.0",
+  "description": "在你已登录、已打开的招聘详情页一键抓取 JD，导入到本地 AI 求职助手。仅读取当前页面，不做后台抓取。",
+  "permissions": ["activeTab", "scripting", "downloads"],
+  "host_permissions": [
+    "https://*.zhipin.com/*",
+    "https://*.lagou.com/*",
+    "https://*.liepin.com/*",
+    "https://*.51job.com/*",
+    "https://*.linkedin.com/*",
+    "http://127.0.0.1:53127/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "抓取当前岗位 JD"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}

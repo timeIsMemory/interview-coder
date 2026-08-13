@@ -7,7 +7,6 @@ import { v4 as uuidv4 } from "uuid";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import screenshot from "screenshot-desktop";
-import os from "os";
 
 const execFileAsync = promisify(execFile);
 
@@ -172,7 +171,7 @@ export class ScreenshotHelper {
       return buffer;
     } catch (error) {
       console.error("Error capturing screenshot:", error);
-      throw new Error(`Failed to capture screenshot: ${error.message}`);
+      throw new Error(`Failed to capture screenshot: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -271,13 +270,6 @@ export class ScreenshotHelper {
         console.log(
           "All screenshot methods failed, creating placeholder image"
         );
-
-        // Create a 1x1 transparent PNG as fallback
-        const fallbackBuffer = Buffer.from(
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
-          "base64"
-        );
-        console.log("Created placeholder image as fallback");
 
         // Show the error but return a valid buffer so the app doesn't crash
         throw new Error(
@@ -403,7 +395,7 @@ export class ScreenshotHelper {
       return { success: true };
     } catch (error) {
       console.error("Error deleting file:", error);
-      return { success: false, error: error.message };
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
   }
 

@@ -1,5 +1,10 @@
 # CodeInterviewAssist
 
+> ## 🧭 AI 求职全流程助手（本仓库扩展版）
+>
+> 本仓库在原隐身解题工具之上，扩展为本地优先的求职助手：**个人事实库 → JD 批量导入（粘贴/文件/CSV/JSON/浏览器扩展/受控抓取 Beta）→ 事实约束的批量简历与问答生成 → 岗位上下文实时辅助 → 录音转写复盘**。
+> 功能说明、架构、合规要点与开发指南见 [ASSISTANT.md](ASSISTANT.md)。运行 `npm test` 执行单元测试。
+
 > ## ⚠️ IMPORTANT NOTICE TO THE COMMUNITY ⚠️
 > 
 > **This is a free, open-source initiative - NOT a full-service product!**
@@ -94,7 +99,7 @@ Note: The application is **NOT** invisible to:
 
 ## Prerequisites
 
-- Node.js (v16 or higher)
+- Node.js v22.5 or higher (the local SQLite store uses the built-in `node:sqlite` module)
 - npm or bun package manager
 - OpenAI API Key
 - Screen Recording Permission for Terminal/IDE

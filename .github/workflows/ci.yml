@@ -22,22 +22,21 @@ jobs:
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: 20
+        # node:sqlite requires Node 22.5+; keep in sync with package.json engines.
+        node-version: 22
         cache: 'npm'
       
     - name: Install dependencies
-      run: npm i
+      run: npm ci
 
     - name: Clearing previous builds
       run: npm run clean
       
     - name: Run Linter
       run: npm run lint
-      continue-on-error: true
 
     - name: Type Check
-      run: npx tsc --noEmit
-      continue-on-error: true
+      run: npm run typecheck
 
     - name: Build
       run: npm run build
@@ -45,3 +44,27 @@ jobs:
     - name: Run Tests
       run: npm test
 
+    - name: Electron E2E smoke test (Windows / macOS)
+      if: runner.os == 'Windows' || runner.os == 'macOS'
+      run: npm run test:e2e
+
+    - name: Electron E2E smoke test (Linux, virtual display)
+      if: runner.os == 'Linux'
+      run: xvfb-run --auto-servernum npm run test:e2e
+
+    - name: Package Windows application
+      if: runner.os == 'Windows'
+      run: npm run package-win
+
+    - name: Package macOS application
+      if: runner.os == 'macOS'
+      env:
+        CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      run: npm run package-mac -- --config.mac.identity=null --config.mac.notarize=false
+
+    - name: Upload installer
+      if: runner.os == 'Windows' || runner.os == 'macOS'
+      uses: actions/upload-artifact@v4
+      with:
+        name: installer-${{ runner.os }}
+        path: release/**

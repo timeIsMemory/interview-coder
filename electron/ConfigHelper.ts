@@ -4,6 +4,8 @@ import path from "node:path"
 import { app } from "electron"
 import { EventEmitter } from "events"
 import { OpenAI } from "openai"
+import { getSecureStore } from "./core/security/secureStore"
+import { redactSecrets } from "./core/security/redact"
 
 interface Config {
   apiKey: string;
@@ -13,6 +15,13 @@ interface Config {
   debuggingModel: string;
   language: string;
   opacity: number;
+  // Model used for resume/JD/Q&A generation. Falls back to solutionModel.
+  generationModel?: string;
+  // Optional dedicated OpenAI key for Whisper transcription, independent of the
+  // chat provider (so a Gemini/Anthropic user can still transcribe).
+  transcriptionApiKey?: string;
+  whisperExecutable?: string;
+  whisperModelPath?: string;
 }
 
 export class ConfigHelper extends EventEmitter {
@@ -110,9 +119,15 @@ export class ConfigHelper extends EventEmitter {
           config.debuggingModel = this.sanitizeModelSelection(config.debuggingModel, config.apiProvider);
         }
         
+        const safe = this.loadSensitiveConfig({
+          apiKey: typeof config.apiKey === "string" ? config.apiKey : undefined,
+          transcriptionApiKey:
+            typeof config.transcriptionApiKey === "string" ? config.transcriptionApiKey : undefined
+        })
         return {
           ...this.defaultConfig,
-          ...config
+          ...config,
+          ...safe
         };
       }
       
@@ -136,7 +151,9 @@ export class ConfigHelper extends EventEmitter {
         fs.mkdirSync(configDir, { recursive: true });
       }
       // Write the config file
-      fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
+      const { apiKey, transcriptionApiKey, ...nonSensitive } = config
+      fs.writeFileSync(this.configPath, JSON.stringify(nonSensitive, null, 2));
+      this.saveSensitiveConfig({ apiKey, transcriptionApiKey })
     } catch (err) {
       console.error("Error saving config:", err);
     }
@@ -214,6 +231,43 @@ export class ConfigHelper extends EventEmitter {
     }
   }
 
+  private loadSensitiveConfig(
+    legacy: Partial<Pick<Config, "apiKey" | "transcriptionApiKey">> = {}
+  ): Pick<Config, "apiKey" | "transcriptionApiKey"> {
+    try {
+      const store = getSecureStore()
+      const apiKey = store.get("apiKey") || legacy.apiKey || ""
+      const transcriptionApiKey = store.get("transcriptionApiKey") || legacy.transcriptionApiKey
+      if (legacy.apiKey && !store.has("apiKey")) store.set("apiKey", legacy.apiKey)
+      if (legacy.transcriptionApiKey && !store.has("transcriptionApiKey")) {
+        store.set("transcriptionApiKey", legacy.transcriptionApiKey)
+      }
+      return {
+        apiKey,
+        transcriptionApiKey
+      }
+    } catch {
+      // ConfigHelper is also imported by isolated tests before Electron boot.
+      return { apiKey: legacy.apiKey || "", transcriptionApiKey: legacy.transcriptionApiKey }
+    }
+  }
+
+  private saveSensitiveConfig(values: Pick<Config, "apiKey" | "transcriptionApiKey">): void {
+    try {
+      const store = getSecureStore()
+      if (values.apiKey !== undefined) {
+        if (values.apiKey) store.set("apiKey", values.apiKey)
+        else store.delete("apiKey")
+      }
+      if (values.transcriptionApiKey !== undefined) {
+        if (values.transcriptionApiKey) store.set("transcriptionApiKey", values.transcriptionApiKey)
+        else store.delete("transcriptionApiKey")
+      }
+    } catch {
+      // Keep config loading usable outside the Electron lifecycle.
+    }
+  }
+
   /**
    * Check if the API key is configured
    */
@@ -241,13 +295,13 @@ export class ConfigHelper extends EventEmitter {
     
     if (provider === "openai") {
       // Basic format validation for OpenAI API keys
-      return /^sk-[a-zA-Z0-9]{32,}$/.test(apiKey.trim());
+      return /^sk-[a-zA-Z0-9_-]{20,}$/.test(apiKey.trim());
     } else if (provider === "gemini") {
       // Basic format validation for Gemini API keys (usually alphanumeric with no specific prefix)
-      return apiKey.trim().length >= 10; // Assuming Gemini keys are at least 10 chars
+      return apiKey.trim().length >= 20
     } else if (provider === "anthropic") {
       // Basic format validation for Anthropic API keys
-      return /^sk-ant-[a-zA-Z0-9]{32,}$/.test(apiKey.trim());
+      return /^sk-ant-[a-zA-Z0-9_-]{20,}$/.test(apiKey.trim());
     }
     
     return false;
@@ -285,115 +339,86 @@ export class ConfigHelper extends EventEmitter {
     this.updateConfig({ language });
   }
   
-  /**
-   * Test API key with the selected provider
-   */
-  public async testApiKey(apiKey: string, provider?: "openai" | "gemini" | "anthropic"): Promise<{valid: boolean, error?: string}> {
-    // Auto-detect provider based on key format if not specified
-    if (!provider) {
-      if (apiKey.trim().startsWith('sk-')) {
-        if (apiKey.trim().startsWith('sk-ant-')) {
-          provider = "anthropic";
-          console.log("Auto-detected Anthropic API key format for testing");
-        } else {
-          provider = "openai";
-          console.log("Auto-detected OpenAI API key format for testing");
-        }
-      } else {
-        provider = "gemini";
-        console.log("Using Gemini API key format for testing (default)");
-      }
+  /** Test an API key against the selected provider before persisting it. */
+  public async testApiKey(
+    apiKey: string,
+    provider?: "openai" | "gemini" | "anthropic"
+  ): Promise<{ valid: boolean; error?: string }> {
+    const resolvedProvider = provider || this.detectProvider(apiKey)
+    if (!this.isValidApiKeyFormat(apiKey, resolvedProvider)) {
+      return { valid: false, error: `Invalid ${resolvedProvider} API key format.` }
     }
-    
-    if (provider === "openai") {
-      return this.testOpenAIKey(apiKey);
-    } else if (provider === "gemini") {
-      return this.testGeminiKey(apiKey);
-    } else if (provider === "anthropic") {
-      return this.testAnthropicKey(apiKey);
-    }
-    
-    return { valid: false, error: "Unknown API provider" };
+
+    if (resolvedProvider === "openai") return this.testOpenAIKey(apiKey)
+    if (resolvedProvider === "gemini") return this.testGeminiKey(apiKey)
+    return this.testAnthropicKey(apiKey)
   }
-  
-  /**
-   * Test OpenAI API key
-   */
-  private async testOpenAIKey(apiKey: string): Promise<{valid: boolean, error?: string}> {
-    try {
-      const openai = new OpenAI({ apiKey });
-      // Make a simple API call to test the key
-      await openai.models.list();
-      return { valid: true };
-    } catch (error: any) {
-      console.error('OpenAI API key test failed:', error);
-      
-      // Determine the specific error type for better error messages
-      let errorMessage = 'Unknown error validating OpenAI API key';
-      
-      if (error.status === 401) {
-        errorMessage = 'Invalid API key. Please check your OpenAI key and try again.';
-      } else if (error.status === 429) {
-        errorMessage = 'Rate limit exceeded. Your OpenAI API key has reached its request limit or has insufficient quota.';
-      } else if (error.status === 500) {
-        errorMessage = 'OpenAI server error. Please try again later.';
-      } else if (error.message) {
-        errorMessage = `Error: ${error.message}`;
-      }
-      
-      return { valid: false, error: errorMessage };
-    }
+
+  private detectProvider(apiKey: string): "openai" | "gemini" | "anthropic" {
+    if (apiKey.trim().startsWith("sk-ant-")) return "anthropic"
+    if (apiKey.trim().startsWith("sk-")) return "openai"
+    return "gemini"
   }
-  
-  /**
-   * Test Gemini API key
-   * Note: This is a simplified implementation since we don't have the actual Gemini client
-   */
-  private async testGeminiKey(apiKey: string): Promise<{valid: boolean, error?: string}> {
+
+  private errorMessage(provider: string, error: unknown): string {
+    const status = this.errorStatus(error)
+    const detail = redactSecrets(error instanceof Error ? error.message : String(error))
+    if (status === 401 || status === 403) return `Invalid ${provider} API key or insufficient permissions.`
+    if (status === 429) return `${provider} rate limit or quota exceeded.`
+    if (status && status >= 500) return `${provider} server error. Please try again later.`
+    return `Unable to validate ${provider} API key: ${detail}`
+  }
+
+  private errorStatus(error: unknown): number | undefined {
+    if (!error || typeof error !== "object" || !("status" in error)) return undefined
+    const value = (error as { status?: unknown }).status
+    return typeof value === "number" ? value : undefined
+  }
+
+  private async testOpenAIKey(apiKey: string): Promise<{ valid: boolean; error?: string }> {
     try {
-      // For now, we'll just do a basic check to ensure the key exists and has valid format
-      // In production, you would connect to the Gemini API and validate the key
-      if (apiKey && apiKey.trim().length >= 20) {
-        // Here you would actually validate the key with a Gemini API call
-        return { valid: true };
-      }
-      return { valid: false, error: 'Invalid Gemini API key format.' };
-    } catch (error: any) {
-      console.error('Gemini API key test failed:', error);
-      let errorMessage = 'Unknown error validating Gemini API key';
-      
-      if (error.message) {
-        errorMessage = `Error: ${error.message}`;
-      }
-      
-      return { valid: false, error: errorMessage };
+      const openai = new OpenAI({ apiKey, timeout: 10000, maxRetries: 0 })
+      await openai.models.list()
+      return { valid: true }
+    } catch (error: unknown) {
+      console.error("OpenAI API key test failed:", error)
+      return { valid: false, error: this.errorMessage("OpenAI", error) }
     }
   }
 
-  /**
-   * Test Anthropic API key
-   * Note: This is a simplified implementation since we don't have the actual Anthropic client
-   */
-  private async testAnthropicKey(apiKey: string): Promise<{valid: boolean, error?: string}> {
+  /** Gemini has a read-only model-list endpoint that validates the supplied key. */
+  private async testGeminiKey(apiKey: string): Promise<{ valid: boolean; error?: string }> {
     try {
-      // For now, we'll just do a basic check to ensure the key exists and has valid format
-      // In production, you would connect to the Anthropic API and validate the key
-      if (apiKey && /^sk-ant-[a-zA-Z0-9]{32,}$/.test(apiKey.trim())) {
-        // Here you would actually validate the key with an Anthropic API call
-        return { valid: true };
-      }
-      return { valid: false, error: 'Invalid Anthropic API key format.' };
-    } catch (error: any) {
-      console.error('Anthropic API key test failed:', error);
-      let errorMessage = 'Unknown error validating Anthropic API key';
-      
-      if (error.message) {
-        errorMessage = `Error: ${error.message}`;
-      }
-      
-      return { valid: false, error: errorMessage };
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`,
+        { signal: AbortSignal.timeout(10000) }
+      )
+      if (!response.ok) throw Object.assign(new Error(await response.text()), { status: response.status })
+      return { valid: true }
+    } catch (error: unknown) {
+      console.error("Gemini API key test failed:", error)
+      return { valid: false, error: this.errorMessage("Gemini", error) }
     }
   }
+
+  /** Anthropic's model-list endpoint validates x-api-key without generating content. */
+  private async testAnthropicKey(apiKey: string): Promise<{ valid: boolean; error?: string }> {
+    try {
+      const response = await fetch("https://api.anthropic.com/v1/models?limit=1", {
+        headers: {
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01"
+        },
+        signal: AbortSignal.timeout(10000)
+      })
+      if (!response.ok) throw Object.assign(new Error(await response.text()), { status: response.status })
+      return { valid: true }
+    } catch (error: unknown) {
+      console.error("Anthropic API key test failed:", error)
+      return { valid: false, error: this.errorMessage("Anthropic", error) }
+    }
+  }
+
 }
 
 // Export a singleton instance

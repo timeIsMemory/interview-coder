@@ -33,7 +33,6 @@ const SolutionCommands: React.FC<SolutionCommandsProps> = ({
   onTooltipVisibilityChange,
   isProcessing,
   extraScreenshots = [],
-  credits,
   currentLanguage,
   setLanguage
 }) => {

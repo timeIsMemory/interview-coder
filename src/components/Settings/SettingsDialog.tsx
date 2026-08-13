@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import {
   Dialog,
-  DialogTrigger,
   DialogContent,
   DialogDescription,
   DialogHeader,
@@ -10,7 +9,6 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Button } from "../ui/button";
-import { Settings } from "lucide-react";
 import { useToast } from "../../contexts/toast";
 
 type APIProvider = "openai" | "gemini" | "anthropic";
@@ -257,6 +255,15 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
   const handleSave = async () => {
     setIsLoading(true);
     try {
+      if (!apiKey.trim()) {
+        throw new Error("???? API Key")
+      }
+
+      const validation = await window.electronAPI.validateApiKey(apiKey, apiProvider)
+      if (!validation.valid) {
+        throw new Error(validation.error || "API Key ????")
+      }
+
       const result = await window.electronAPI.updateConfig({
         apiKey,
         apiProvider,

@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { width: 300px; font-family: -apple-system, "Microsoft YaHei", sans-serif; margin: 0; padding: 14px; background: #111; color: #eee; }
+      h1 { font-size: 14px; margin: 0 0 8px; }
+      p { font-size: 11px; color: #999; margin: 0 0 10px; line-height: 1.5; }
+      button { width: 100%; padding: 8px; font-size: 13px; border: 0; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
+      button:disabled { opacity: 0.5; }
+      #status { font-size: 11px; margin-top: 10px; min-height: 16px; }
+      .preview { font-size: 11px; color: #bbb; margin-top: 10px; border-top: 1px solid #333; padding-top: 8px; max-height: 120px; overflow: auto; }
+    </style>
+  </head>
+  <body>
+    <h1>抓取当前岗位 JD</h1>
+    <p>仅读取你当前打开的这一个页面。抓取后优先送入本地桌面应用，未运行则下载 JSON，可在“岗位 - 导入 JSON”中导入。</p>
+    <button id="grab">抓取当前页面</button>
+    <div id="status"></div>
+    <div class="preview" id="preview"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>

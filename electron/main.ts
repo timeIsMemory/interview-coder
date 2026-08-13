@@ -1,4 +1,4 @@
-import { app, BrowserWindow, screen, shell, ipcMain } from "electron"
+import { app, BrowserWindow, screen, shell } from "electron"
 import path from "path"
 import fs from "fs"
 import { initializeIpcHandlers } from "./ipcHandlers"
@@ -7,6 +7,10 @@ import { ScreenshotHelper } from "./ScreenshotHelper"
 import { ShortcutsHelper } from "./shortcuts"
 import { initAutoUpdater } from "./autoUpdater"
 import { configHelper } from "./ConfigHelper"
+import { initDatabase } from "./core/db/Database"
+import { initSecureStore } from "./core/security/secureStore"
+import { registerAssistantHandlers } from "./core/ipc/registerAssistant"
+import type { ProblemInfo } from "./core/solver/types"
 import * as dotenv from "dotenv"
 
 // Constants
@@ -32,7 +36,7 @@ const state = {
 
   // View and state management
   view: "queue" as "queue" | "solutions" | "debug",
-  problemInfo: null as any,
+  problemInfo: null as ProblemInfo | null,
   hasDebugged: false,
 
   // Processing events
@@ -57,8 +61,8 @@ export interface IProcessingHelperDeps {
   getMainWindow: () => BrowserWindow | null
   getView: () => "queue" | "solutions" | "debug"
   setView: (view: "queue" | "solutions" | "debug") => void
-  getProblemInfo: () => any
-  setProblemInfo: (info: any) => void
+  getProblemInfo: () => ProblemInfo | null
+  setProblemInfo: (info: ProblemInfo | null) => void
   getScreenshotQueue: () => string[]
   getExtraScreenshotQueue: () => string[]
   clearQueues: () => void
@@ -178,7 +182,7 @@ const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
   app.quit()
 } else {
-  app.on("second-instance", (event, commandLine) => {
+  app.on("second-instance", () => {
     // Someone tried to run a second instance, we should focus our window.
     if (state.mainWindow) {
       if (state.mainWindow.isMinimized()) state.mainWindow.restore()
@@ -263,13 +267,13 @@ async function createWindow(): Promise<void> {
   if (isDev) {
     // In development, load from the dev server
     console.log("Loading from development server: http://localhost:54321")
-    state.mainWindow.loadURL("http://localhost:54321").catch((error) => {
+    state.mainWindow?.loadURL("http://localhost:54321").catch((error) => {
       console.error("Failed to load dev server, falling back to local file:", error)
       // Fallback to local file if dev server is not available
       const indexPath = path.join(__dirname, "../dist/index.html")
       console.log("Falling back to:", indexPath)
       if (fs.existsSync(indexPath)) {
-        state.mainWindow.loadFile(indexPath)
+        state.mainWindow?.loadFile(indexPath)
       } else {
         console.error("Could not find index.html in dist folder")
       }
@@ -389,34 +393,36 @@ function handleWindowClosed(): void {
 
 // Window visibility functions
 function hideMainWindow(): void {
-  if (!state.mainWindow?.isDestroyed()) {
-    const bounds = state.mainWindow.getBounds();
+  const mainWindow = state.mainWindow
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const bounds = mainWindow.getBounds();
     state.windowPosition = { x: bounds.x, y: bounds.y };
     state.windowSize = { width: bounds.width, height: bounds.height };
-    state.mainWindow.setIgnoreMouseEvents(true, { forward: true });
-    state.mainWindow.setOpacity(0);
+    mainWindow.setIgnoreMouseEvents(true, { forward: true });
+    mainWindow.setOpacity(0);
     state.isWindowVisible = false;
     console.log('Window hidden, opacity set to 0');
   }
 }
 
 function showMainWindow(): void {
-  if (!state.mainWindow?.isDestroyed()) {
+  const mainWindow = state.mainWindow
+  if (mainWindow && !mainWindow.isDestroyed()) {
     if (state.windowPosition && state.windowSize) {
-      state.mainWindow.setBounds({
+      mainWindow.setBounds({
         ...state.windowPosition,
         ...state.windowSize
       });
     }
-    state.mainWindow.setIgnoreMouseEvents(false);
-    state.mainWindow.setAlwaysOnTop(true, "screen-saver", 1);
-    state.mainWindow.setVisibleOnAllWorkspaces(true, {
+    mainWindow.setIgnoreMouseEvents(false);
+    mainWindow.setAlwaysOnTop(true, "screen-saver", 1);
+    mainWindow.setVisibleOnAllWorkspaces(true, {
       visibleOnFullScreen: true
     });
-    state.mainWindow.setContentProtection(true);
-    state.mainWindow.setOpacity(0); // Set opacity to 0 before showing
-    state.mainWindow.showInactive(); // Use showInactive instead of show+focus
-    state.mainWindow.setOpacity(1); // Then set opacity to 1 after showing
+    mainWindow.setContentProtection(true);
+    mainWindow.setOpacity(0); // Set opacity to 0 before showing
+    mainWindow.showInactive(); // Use showInactive instead of show+focus
+    mainWindow.setOpacity(1); // Then set opacity to 1 after showing
     state.isWindowVisible = true;
     console.log('Window shown with showInactive(), opacity set to 1');
   }
@@ -461,9 +467,10 @@ function moveWindowVertical(updateFn: (y: number) => number): void {
   })
 
   // Only update if within bounds
-  if (newY >= maxUpLimit && newY <= maxDownLimit) {
+  const mainWindow = state.mainWindow
+  if (mainWindow && !mainWindow.isDestroyed() && newY >= maxUpLimit && newY <= maxDownLimit) {
     state.currentY = newY
-    state.mainWindow.setPosition(
+    mainWindow.setPosition(
       Math.round(state.currentX),
       Math.round(state.currentY)
     )
@@ -472,13 +479,14 @@ function moveWindowVertical(updateFn: (y: number) => number): void {
 
 // Window dimension functions
 function setWindowDimensions(width: number, height: number): void {
-  if (!state.mainWindow?.isDestroyed()) {
-    const [currentX, currentY] = state.mainWindow.getPosition()
+  const mainWindow = state.mainWindow
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const [currentX, currentY] = mainWindow.getPosition()
     const primaryDisplay = screen.getPrimaryDisplay()
     const workArea = primaryDisplay.workAreaSize
     const maxWidth = Math.floor(workArea.width * 0.5)
 
-    state.mainWindow.setBounds({
+    mainWindow.setBounds({
       x: Math.min(currentX, workArea.width - maxWidth),
       y: currentY,
       width: Math.min(width + 32, maxWidth),
@@ -524,7 +532,20 @@ async function initializeApp() {
     app.setPath('cache', cachePath)
       
     loadEnvVariables()
-    
+
+    // Initialize secure storage before configuration reads, then migrate the
+    // legacy JSON database into SQLite on first launch.
+    try {
+      initSecureStore(path.join(appDataPath, "assistant-secure.json"))
+      initDatabase(
+        path.join(appDataPath, "assistant.db"),
+        path.join(appDataPath, "assistant-db.json")
+      )
+      console.log("Assistant database and secure store initialized")
+    } catch (dbError) {
+      console.error("Failed to initialize assistant storage:", dbError)
+    }
+
     // Ensure a configuration file exists
     if (!configHelper.hasApiKey()) {
       console.log("No API key found in configuration. User will need to set up.")
@@ -559,6 +580,14 @@ async function initializeApp() {
       moveWindowUp: () => moveWindowVertical((y) => y - state.step),
       moveWindowDown: () => moveWindowVertical((y) => y + state.step)
     })
+    // Register all assistant (profile/jobs/generation/recording) IPC handlers.
+    try {
+      registerAssistantHandlers(getMainWindow)
+      console.log("Assistant IPC handlers registered")
+    } catch (assistantError) {
+      console.error("Failed to register assistant handlers:", assistantError)
+    }
+
     await createWindow()
     state.shortcutsHelper?.registerGlobalShortcuts()
 
@@ -581,30 +610,14 @@ app.on("open-url", (event, url) => {
   event.preventDefault()
 })
 
-// Handle second instance (removed auth callback handling)
-app.on("second-instance", (event, commandLine) => {
-  console.log("second-instance event received:", commandLine)
-  
-  // Focus or create the main window
-  if (!state.mainWindow) {
-    createWindow()
-  } else {
-    if (state.mainWindow.isMinimized()) state.mainWindow.restore()
-    state.mainWindow.focus()
+// Quit when all windows are closed (except on macOS). The single-instance lock
+// and second-instance handling are already set up once near the top of the file.
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") {
+    app.quit()
+    state.mainWindow = null
   }
 })
-
-// Prevent multiple instances of the app
-if (!app.requestSingleInstanceLock()) {
-  app.quit()
-} else {
-  app.on("window-all-closed", () => {
-    if (process.platform !== "darwin") {
-      app.quit()
-      state.mainWindow = null
-    }
-  })
-}
 
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) {
@@ -630,11 +643,11 @@ function getScreenshotHelper(): ScreenshotHelper | null {
   return state.screenshotHelper
 }
 
-function getProblemInfo(): any {
+function getProblemInfo(): ProblemInfo | null {
   return state.problemInfo
 }
 
-function setProblemInfo(problemInfo: any): void {
+function setProblemInfo(problemInfo: ProblemInfo | null): void {
   state.problemInfo = problemInfo
 }
 

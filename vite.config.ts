@@ -17,7 +17,10 @@ export default defineConfig({
             sourcemap: true,
             minify: false,
             rollupOptions: {
-              external: ["electron"]
+              // Keep optional native/heavy parsers external so a missing
+              // optional dependency never breaks the electron bundle. They are
+              // lazily required at runtime and their absence is handled.
+              external: ["electron", "pdf-parse", "mammoth"]
             }
           }
         }
